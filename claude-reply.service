@@ -1,0 +1,17 @@
+[Unit]
+Description=claude-reply: web form for replying to Claude via tmux send-keys
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/claude-reply
+Environment=PATH=%h/Projects/claude-reply/.venv/bin:/usr/local/bin:/usr/bin:/bin
+# Bind to all interfaces so phone on the LAN/VPN can reach it
+ExecStart=%h/Projects/claude-reply/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8765 --log-level info
+Restart=on-failure
+RestartSec=3
+# tmux send-keys needs the user's tmux socket — DefaultDependencies=no would
+# break that. We rely on the user's tmux socket already existing in /tmp.
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,8 @@
+{% extends "_base.html" %}
+{% block title %}Couldn't send{% endblock %}
+{% block body %}
+<h1 class="err">Couldn't send</h1>
+<div class="meta">Target <span class="target">{{ target }}</span></div>
+<div class="card"><pre>{{ detail }}</pre></div>
+<p class="small">Token NOT consumed &mdash; you can <a href="javascript:history.back()">go back</a> and try again.</p>
+{% endblock %}

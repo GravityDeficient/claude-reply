@@ -1,0 +1,22 @@
+{% extends "_base.html" %}
+{% block title %}Reply to Claude{% endblock %}
+{% block body %}
+<h1>Reply to Claude</h1>
+<div class="meta">
+  Sending to <span class="target">{{ target }}</span>
+  &middot; pane runs <span class="target">{{ pane }}</span>
+</div>
+{% if title or context %}
+<div class="card">
+  {% if title %}<div style="font-weight:600;margin-bottom:0.35rem">{{ title }}</div>{% endif %}
+  {% if context %}<pre>{{ context }}</pre>{% endif %}
+</div>
+{% endif %}
+<form method="post" action="/r/{{ token }}">
+  <textarea name="message" autofocus required
+            placeholder="Type your reply&hellip;" autocapitalize="sentences"
+            autocomplete="off" spellcheck="true"></textarea>
+  <button type="submit">Send</button>
+</form>
+<p class="small">One-shot link. Burns on send. Expires in 1 hour.</p>
+{% endblock %}

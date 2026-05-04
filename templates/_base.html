@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>{% block title %}claude-reply{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0e1116; --fg: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --ok: #3fb950; --err: #f85149;
+    --card: #161b22; --border: #30363d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e;
+            --card: #f6f8fa; --border: #d1d9e0; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+               font-size: 17px; line-height: 1.5; }
+  main { max-width: 640px; margin: 0 auto; padding: env(safe-area-inset-top, 1rem) 1rem 1rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem; }
+  .target { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+            background: var(--card); padding: 0.15rem 0.4rem; border-radius: 4px;
+            border: 1px solid var(--border); }
+  textarea { width: 100%; min-height: 12rem; padding: 0.75rem;
+             font: inherit; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+             background: var(--card); color: var(--fg);
+             border: 1px solid var(--border); border-radius: 8px;
+             resize: vertical; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { width: 100%; margin-top: 0.75rem; padding: 0.9rem;
+           font: inherit; font-weight: 600; background: var(--accent); color: #fff;
+           border: 0; border-radius: 8px; cursor: pointer; }
+  button:active { opacity: 0.85; }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+  .small { font-size: 0.85rem; color: var(--muted); }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

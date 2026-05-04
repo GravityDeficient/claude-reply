@@ -1,0 +1,8 @@
+{% extends "_base.html" %}
+{% block title %}Sent{% endblock %}
+{% block body %}
+<h1 class="ok">Sent</h1>
+<div class="meta">Delivered to <span class="target">{{ target }}</span></div>
+<div class="card"><pre>{{ message }}</pre></div>
+<p class="small">Link burned. Close this tab.</p>
+{% endblock %}
