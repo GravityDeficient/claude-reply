@@ -7,6 +7,7 @@ the URL — assumes you're on a trusted network (LAN or VPN).
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
@@ -17,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.templating import Jinja2Templates
 
 CONFIG_DIR = Path(os.environ.get("CLAUDE_REPLY_CONFIG", "~/.config/claude-reply")).expanduser()
@@ -31,6 +32,12 @@ TOKEN_TTL_SECONDS = 60 * 60  # 1 hour
 ALLOWED_PANE_COMMANDS = set(
     os.environ.get("CLAUDE_REPLY_ALLOWED_COMMANDS", "claude,node,python,python3").split(",")
 )
+
+# Optional HTTP Basic auth on /r/{token} routes. Format: "user:password".
+# When set, the URL token alone is no longer sufficient — browsers also need
+# the basic-auth credentials. /mint and /burn always use X-Mint-Secret.
+BASIC_AUTH = os.environ.get("CLAUDE_REPLY_BASIC_AUTH", "").strip()
+BASIC_AUTH_REALM = os.environ.get("CLAUDE_REPLY_BASIC_AUTH_REALM", "claude-reply")
 
 # Mint secret bootstrap. Generated once, persisted, never logged.
 if not SECRET_PATH.exists():
@@ -177,6 +184,29 @@ def send_escape_then_text(target: str, message: str) -> tuple[bool, str]:
         return False, f"tmux send-keys failed: {e.stderr.decode().strip()}"
 
 
+def _basic_auth_check(request: Request) -> Response | None:
+    """Returns a 401 response if Basic auth is configured and the request
+    fails it. Returns None when the request is allowed through (either
+    because auth isn't configured or the credentials match).
+    Constant-time compare to keep timing leaks off the table.
+    """
+    if not BASIC_AUTH:
+        return None
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8", errors="replace")
+            if secrets.compare_digest(decoded, BASIC_AUTH):
+                return None
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return Response(
+        content="Authentication required.",
+        status_code=401,
+        headers={"WWW-Authenticate": f'Basic realm="{BASIC_AUTH_REALM}"'},
+    )
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
@@ -257,7 +287,10 @@ def _load_token(token: str) -> sqlite3.Row | None:
 
 
 @app.get("/r/{token}", response_class=HTMLResponse)
-def reply_form(request: Request, token: str) -> HTMLResponse:
+def reply_form(request: Request, token: str):
+    auth_fail = _basic_auth_check(request)
+    if auth_fail:
+        return auth_fail
     row = _load_token(token)
     if row is None:
         return templates.TemplateResponse(request, "expired.html", {}, status_code=410)
@@ -289,7 +322,10 @@ def reply_submit(
     message: str = Form(""),
     choice: str = Form(""),
     other_text: str = Form(""),
-) -> HTMLResponse:
+):
+    auth_fail = _basic_auth_check(request)
+    if auth_fail:
+        return auth_fail
     row = _load_token(token)
     if row is None:
         return templates.TemplateResponse(request, "expired.html", {}, status_code=410)

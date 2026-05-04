@@ -87,6 +87,21 @@ curl -X POST "$NTFY_URL/$NTFY_TOPIC" \
 `$PUBLIC_BASE` is whatever URL phones use to reach this service —
 usually `http://<host-lan-ip>:8765` or a hostname behind a reverse proxy.
 
+## Optional: enable HTTP Basic auth
+
+The URL token is unguessable, but if you want defense-in-depth (so a leaked
+URL alone isn't enough), add Basic auth via the systemd unit:
+
+```ini
+[Service]
+Environment=CLAUDE_REPLY_BASIC_AUTH=youruser:yourstrongpassword
+```
+
+Then `systemctl --user daemon-reload && systemctl --user restart claude-reply`.
+Browsers will pop a credentials prompt before any reply form loads.
+`/mint` and `/burn` still use `X-Mint-Secret` — they're internal endpoints
+the local notifier hits, not exposed to phones.
+
 ## Service ops
 
 ```bash
@@ -106,6 +121,8 @@ Listens on `0.0.0.0:8765`. SQLite at `~/.config/claude-reply/tokens.sqlite`.
 | `CLAUDE_REPLY_PUBLIC_BASE`         | _(none — set per host)_                | Base URL embedded in the notification |
 | `CLAUDE_REPLY_SECRET_PATH`         | `~/.config/claude-reply/mint-secret`   | Where to read the mint secret |
 | `CLAUDE_REPLY_ALLOWED_COMMANDS`    | `claude,node,python,python3`           | Pane allowlist (csv) |
+| `CLAUDE_REPLY_BASIC_AUTH`          | _(unset — disabled)_                   | If set as `user:pass`, browsers must authenticate to view/submit any reply form. `/mint` and `/burn` keep using `X-Mint-Secret`. |
+| `CLAUDE_REPLY_BASIC_AUTH_REALM`    | `claude-reply`                         | Realm string shown in the browser auth prompt |
 
 ## Files
 
