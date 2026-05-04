@@ -6,12 +6,47 @@
   Sending to <span class="target">{{ target }}</span>
   &middot; pane runs <span class="target">{{ pane }}</span>
 </div>
+
 {% if title or context %}
 <div class="card">
   {% if title %}<div style="font-weight:600;margin-bottom:0.35rem">{{ title }}</div>{% endif %}
   {% if context %}<pre>{{ context }}</pre>{% endif %}
 </div>
 {% endif %}
+
+{% if kind == 'picker' and options %}
+<form method="post" action="/r/{{ token }}">
+  <fieldset style="border:0;padding:0;margin:1rem 0 0">
+    <legend class="small" style="padding:0 0 0.5rem">Pick an option:</legend>
+    {% for opt in options %}
+    <label style="display:block;background:var(--card);border:1px solid var(--border);
+                  border-radius:8px;padding:0.85rem;margin-bottom:0.5rem;cursor:pointer">
+      <input type="radio" name="choice" value="{{ loop.index0 }}"
+             style="margin-right:0.6rem;transform:scale(1.2)" required>
+      <strong>{{ opt.label }}</strong>
+      {% if opt.description %}
+        <div class="small" style="margin-top:0.25rem;margin-left:1.6rem">{{ opt.description }}</div>
+      {% endif %}
+    </label>
+    {% endfor %}
+    <label style="display:block;background:var(--card);border:1px solid var(--border);
+                  border-radius:8px;padding:0.85rem;cursor:pointer">
+      <input type="radio" name="choice" value="other" id="choice_other"
+             style="margin-right:0.6rem;transform:scale(1.2)">
+      <strong>Other &mdash; type your own answer</strong>
+      <textarea name="other_text" id="other_text"
+                style="margin-top:0.5rem;min-height:5rem"
+                placeholder="Free-text reply (only sent if Other is selected)"
+                onfocus="document.getElementById('choice_other').checked = true"></textarea>
+    </label>
+  </fieldset>
+  <button type="submit">Send</button>
+  <p class="small">
+    Picking an option arrows-and-Enters in the picker.
+    Other cancels the picker and sends as a fresh prompt.
+  </p>
+</form>
+{% else %}
 <form method="post" action="/r/{{ token }}">
   <textarea name="message" autofocus required
             placeholder="Type your reply&hellip;" autocapitalize="sentences"
@@ -19,4 +54,5 @@
   <button type="submit">Send</button>
 </form>
 <p class="small">One-shot link. Burns on send. Expires in 1 hour.</p>
+{% endif %}
 {% endblock %}

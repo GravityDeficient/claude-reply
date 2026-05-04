@@ -7,6 +7,7 @@ the URL — assumes you're on a trusted network (LAN or VPN).
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import sqlite3
@@ -62,16 +63,17 @@ def init_db() -> None:
                 used_at     INTEGER
             )
         """)
-        # Best-effort migration for the context column. SQLite will raise
-        # on duplicate column, hence the try.
-        try:
-            c.execute("ALTER TABLE tokens ADD COLUMN title TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE tokens ADD COLUMN context TEXT")
-        except sqlite3.OperationalError:
-            pass
+        # Best-effort additive migrations. SQLite raises on duplicate column.
+        for col, decl in [
+            ("title", "TEXT"),
+            ("context", "TEXT"),
+            ("kind", "TEXT"),          # "prompt" (default) or "picker"
+            ("options_json", "TEXT"),  # JSON array of {label, description} for picker
+        ]:
+            try:
+                c.execute(f"ALTER TABLE tokens ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def sweep_expired() -> int:
@@ -94,13 +96,20 @@ def pane_command(target: str) -> str | None:
         return None
 
 
-def send_to_pane(target: str, message: str) -> tuple[bool, str]:
-    """send-keys the message + Enter into the target pane. Returns (ok, detail)."""
+def _check_pane(target: str) -> tuple[bool, str]:
     cmd = pane_command(target)
     if cmd is None:
         return False, f"pane {target} no longer exists"
     if cmd not in ALLOWED_PANE_COMMANDS:
         return False, f"pane {target} is running '{cmd}', not in allowlist"
+    return True, cmd
+
+
+def send_to_pane(target: str, message: str) -> tuple[bool, str]:
+    """send-keys the message + Enter into the target pane. Returns (ok, detail)."""
+    ok, detail = _check_pane(target)
+    if not ok:
+        return False, detail
     try:
         subprocess.run(
             ["tmux", "send-keys", "-t", target, "-l", message],
@@ -112,6 +121,58 @@ def send_to_pane(target: str, message: str) -> tuple[bool, str]:
             check=True, capture_output=True, timeout=2,
         )
         return True, "sent"
+    except subprocess.CalledProcessError as e:
+        return False, f"tmux send-keys failed: {e.stderr.decode().strip()}"
+
+
+def send_picker_selection(target: str, index: int) -> tuple[bool, str]:
+    """For an active AskUserQuestion picker: arrow Down N times then Enter to
+    select option N (0-indexed). Pre-flight verifies the pane still hosts
+    Claude — we can't externally tell whether the picker itself is up, so a
+    misfire here would inject literal `[B[B` escape sequences into the next
+    prompt input. Acceptable v1 risk; mitigated by short token TTLs and the
+    burn-on-prompt hook.
+    """
+    ok, detail = _check_pane(target)
+    if not ok:
+        return False, detail
+    if index < 0 or index > 32:
+        return False, f"option index {index} out of range"
+    try:
+        keys = ["Down"] * index + ["Enter"]
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target] + keys,
+            check=True, capture_output=True, timeout=2,
+        )
+        return True, f"selected option {index}"
+    except subprocess.CalledProcessError as e:
+        return False, f"tmux send-keys failed: {e.stderr.decode().strip()}"
+
+
+def send_escape_then_text(target: str, message: str) -> tuple[bool, str]:
+    """For an active picker when the user wants free text: Escape cancels
+    the picker (returns the AskUserQuestion as 'rejected' to Claude), then
+    text + Enter submits as a fresh prompt. Claude sees both the rejection
+    and the new message and responds to the new message.
+    """
+    ok, detail = _check_pane(target)
+    if not ok:
+        return False, detail
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target, "Escape"],
+            check=True, capture_output=True, timeout=2,
+        )
+        time.sleep(0.2)  # let the picker actually dismiss before typing
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target, "-l", message],
+            check=True, capture_output=True, timeout=2,
+        )
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target, "Enter"],
+            check=True, capture_output=True, timeout=2,
+        )
+        return True, "canceled picker, submitted text"
     except subprocess.CalledProcessError as e:
         return False, f"tmux send-keys failed: {e.stderr.decode().strip()}"
 
@@ -153,6 +214,8 @@ async def mint(
     target: str = Form(...),
     title: str = Form(""),
     context: str = Form(""),
+    kind: str = Form("prompt"),
+    options_json: str = Form(""),
 ) -> str:
     if request.headers.get("X-Mint-Secret") != MINT_SECRET:
         raise HTTPException(status_code=401, detail="bad secret")
@@ -162,11 +225,26 @@ async def mint(
     # to inflate SQLite for some pathological notification body.
     title = title[:200]
     context = context[:2000]
+    if kind not in ("prompt", "picker"):
+        kind = "prompt"
+    # Validate options_json — store only if it parses to a list. Anything
+    # else degrades to plain prompt mode.
+    if kind == "picker":
+        try:
+            parsed = json.loads(options_json or "[]")
+            if not isinstance(parsed, list) or not parsed:
+                kind, options_json = "prompt", ""
+        except json.JSONDecodeError:
+            kind, options_json = "prompt", ""
     token = secrets.token_urlsafe(16)
     with db() as c:
         c.execute(
-            "INSERT INTO tokens (token, target, created_at, title, context) VALUES (?, ?, ?, ?, ?)",
-            (token, target, int(time.time()), title or None, context or None),
+            """INSERT INTO tokens
+               (token, target, created_at, title, context, kind, options_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (token, target, int(time.time()),
+             title or None, context or None,
+             kind, options_json or None),
         )
     return token
 
@@ -186,24 +264,77 @@ def reply_form(request: Request, token: str) -> HTMLResponse:
     if row["used_at"] is not None:
         return templates.TemplateResponse(request, "used.html", {"target": row["target"]}, status_code=410)
     pane = pane_command(row["target"]) or "(pane gone)"
+    options = []
+    kind = row["kind"] or "prompt"
+    if kind == "picker" and row["options_json"]:
+        try:
+            options = json.loads(row["options_json"])
+        except json.JSONDecodeError:
+            options = []
+            kind = "prompt"
     return templates.TemplateResponse(
         request, "reply.html",
         {
             "token": token, "target": row["target"], "pane": pane,
             "title": row["title"], "context": row["context"],
+            "kind": kind, "options": options,
         },
     )
 
 
 @app.post("/r/{token}", response_class=HTMLResponse)
-def reply_submit(request: Request, token: str, message: str = Form(...)) -> HTMLResponse:
+def reply_submit(
+    request: Request,
+    token: str,
+    message: str = Form(""),
+    choice: str = Form(""),
+    other_text: str = Form(""),
+) -> HTMLResponse:
     row = _load_token(token)
     if row is None:
         return templates.TemplateResponse(request, "expired.html", {}, status_code=410)
     if row["used_at"] is not None:
         return templates.TemplateResponse(request, "used.html", {"target": row["target"]}, status_code=410)
 
-    ok, detail = send_to_pane(row["target"], message)
+    kind = row["kind"] or "prompt"
+    summary = ""
+
+    if kind == "picker":
+        if choice == "other":
+            text = other_text.strip()
+            if not text:
+                return templates.TemplateResponse(
+                    request, "error.html",
+                    {"detail": "Selected Other but no text provided.", "target": row["target"]},
+                    status_code=400,
+                )
+            ok, detail = send_escape_then_text(row["target"], text)
+            summary = f"(canceled picker) {text}"
+        elif choice.isdigit():
+            idx = int(choice)
+            ok, detail = send_picker_selection(row["target"], idx)
+            try:
+                opts = json.loads(row["options_json"] or "[]")
+                summary = f"selected: {opts[idx]['label']}"
+            except (json.JSONDecodeError, IndexError, KeyError):
+                summary = f"selected option #{idx}"
+        else:
+            return templates.TemplateResponse(
+                request, "error.html",
+                {"detail": "No selection made.", "target": row["target"]},
+                status_code=400,
+            )
+    else:
+        # Plain prompt-mode reply (idle notification, generic message, etc.)
+        if not message.strip():
+            return templates.TemplateResponse(
+                request, "error.html",
+                {"detail": "Empty message.", "target": row["target"]},
+                status_code=400,
+            )
+        ok, detail = send_to_pane(row["target"], message)
+        summary = message
+
     if not ok:
         return templates.TemplateResponse(
             request, "error.html", {"detail": detail, "target": row["target"]}, status_code=409
@@ -213,5 +344,5 @@ def reply_submit(request: Request, token: str, message: str = Form(...)) -> HTML
         c.execute("UPDATE tokens SET used_at = ? WHERE token = ?", (int(time.time()), token))
 
     return templates.TemplateResponse(
-        request, "success.html", {"target": row["target"], "message": message}
+        request, "success.html", {"target": row["target"], "message": summary}
     )
