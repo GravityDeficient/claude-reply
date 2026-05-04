@@ -127,6 +127,26 @@ def healthz() -> str:
     return "ok"
 
 
+@app.post("/burn", response_class=PlainTextResponse)
+async def burn(request: Request, target: str = Form(...)) -> str:
+    """Mark any outstanding tokens for a target as used. Called from the
+    UserPromptSubmit hook so local prompts invalidate pending notifications.
+
+    Auth: same X-Mint-Secret as /mint. Always-200 to keep the hook silent.
+    """
+    if request.headers.get("X-Mint-Secret") != MINT_SECRET:
+        # Silent 200 — never want to break the user's prompt loop on auth fail
+        return "0"
+    if not target:
+        return "0"
+    with db() as c:
+        cur = c.execute(
+            "UPDATE tokens SET used_at = ? WHERE target = ? AND used_at IS NULL",
+            (int(time.time()), target),
+        )
+        return str(cur.rowcount)
+
+
 @app.post("/mint", response_class=PlainTextResponse)
 async def mint(
     request: Request,
