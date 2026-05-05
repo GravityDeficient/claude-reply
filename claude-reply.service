@@ -8,6 +8,12 @@ WorkingDirectory=%h/Projects/claude-reply
 Environment=PATH=%h/Projects/claude-reply/.venv/bin:/usr/local/bin:/usr/bin:/bin
 # Bind to all interfaces so phone on the LAN/VPN can reach it
 ExecStart=%h/Projects/claude-reply/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8765 --log-level info
+# Sanity-check the LAN bind. If a stale process is squatting :8765 on
+# 127.0.0.1 only, uvicorn would exit immediately with EADDRINUSE — but if
+# someone hand-launched a misconfigured uvicorn (--host 127.0.0.1) and
+# systemd thought it was its own, we'd silently lose phone reachability
+# for hours. Polling for the 0.0.0.0:8765 entry catches that.
+ExecStartPost=/bin/sh -c 'for _ in $(seq 1 10); do sleep 0.5; ss -ltn | grep -q "0\\.0\\.0\\.0:8765 " && exit 0; done; echo "claude-reply not bound to 0.0.0.0:8765 after 5s" >&2; exit 1'
 Restart=on-failure
 RestartSec=3
 # tmux send-keys needs the user's tmux socket — DefaultDependencies=no would
